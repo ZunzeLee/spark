@@ -3540,6 +3540,10 @@ class Analyzer(override val catalogManager: CatalogManager) extends RuleExecutor
       case LeftOuter =>
         (leftKeys ++ lUniqueOutput ++ rUniqueOutput.map(_.withNullability(true)),
           rightKeys.map(_.withNullability(true)))
+      // add by Zongze Li
+      case LastJoin =>
+        (leftKeys ++ lUniqueOutput ++ rUniqueOutput.map(_.withNullability(true)),
+          rightKeys.map(_.withNullability(true)))
       case LeftExistence(_) =>
         (leftKeys ++ lUniqueOutput, Seq.empty)
       case RightOuter =>

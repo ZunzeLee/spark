@@ -162,7 +162,8 @@ case class BroadcastHashJoinExec(
   }
 
   private def multipleOutputForOneInput: Boolean = joinType match {
-    case _: InnerLike | LeftOuter | RightOuter =>
+    // add by Zongze Li
+    case _: InnerLike | LeftOuter | RightOuter | LastJoin =>
       // For inner and outer joins, one row from the streamed side may produce multiple result rows,
       // if the build side has duplicated keys. Note that here we wait for the broadcast to be
       // finished, which is a no-op because it's already finished when we wait it in `doProduce`.

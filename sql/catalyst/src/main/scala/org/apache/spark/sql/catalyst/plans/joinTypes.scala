@@ -27,6 +27,8 @@ object JoinType {
     case "inner" => Inner
     case "outer" | "full" | "fullouter" => FullOuter
     case "leftouter" | "left" => LeftOuter
+    // add by Zongze Li
+    case "last" => LastJoin
     case "rightouter" | "right" => RightOuter
     case "leftsemi" | "semi" => LeftSemi
     case "leftanti" | "anti" => LeftAnti
@@ -35,6 +37,8 @@ object JoinType {
       val supported = Seq(
         "inner",
         "outer", "full", "fullouter", "full_outer",
+        // add by Zongze Li
+        "last",
         "leftouter", "left", "left_outer",
         "rightouter", "right", "right_outer",
         "leftsemi", "left_semi", "semi",
@@ -88,6 +92,11 @@ case object LeftAnti extends JoinType {
   override def sql: String = "LEFT ANTI"
 }
 
+// add by Zongze Li
+case object LastJoin extends JoinType{
+  override def sql: String = "LAST"
+}
+
 case class ExistenceJoin(exists: Attribute) extends JoinType {
   override def sql: String = {
     // This join type is only used in the end of optimizer and physical plans, we will not
@@ -103,7 +112,9 @@ case class NaturalJoin(tpe: JoinType) extends JoinType {
 }
 
 case class UsingJoin(tpe: JoinType, usingColumns: Seq[String]) extends JoinType {
-  require(Seq(Inner, LeftOuter, LeftSemi, RightOuter, FullOuter, LeftAnti, Cross).contains(tpe),
+  // Add by Zongze Li
+  require(Seq(Inner, LeftOuter, LeftSemi, RightOuter, FullOuter, LeftAnti, Cross,
+    LastJoin).contains(tpe),
     "Unsupported using join type " + tpe)
   override def sql: String = "USING " + tpe.sql
   override def toString: String = s"UsingJoin($tpe, ${usingColumns.mkString("[", ", ", "]")})"

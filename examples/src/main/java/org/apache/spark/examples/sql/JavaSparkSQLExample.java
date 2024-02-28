@@ -94,12 +94,25 @@ public class JavaSparkSQLExample {
       .getOrCreate();
     // $example off:init_session$
 
-    runBasicDataFrameExample(spark);
-    runDatasetCreationExample(spark);
-    runInferSchemaExample(spark);
-    runProgrammaticSchemaExample(spark);
+//    runBasicDataFrameExample(spark);
+//    runDatasetCreationExample(spark);
+//    runInferSchemaExample(spark);
+//    runProgrammaticSchemaExample(spark);
+    addSQLJoinTypeExample(spark);
 
     spark.stop();
+  }
+
+  private static void addSQLJoinTypeExample(SparkSession spark) throws AnalysisException{
+    Dataset<Row> df = spark.read().json("examples/src/main/resources/test/people.json");
+    df.createOrReplaceTempView("people");
+    Dataset<Row> dfClass = spark.read().json("examples/src/main/resources/test/class.json");
+    dfClass.createOrReplaceTempView("class");
+//    spark.sql("select * from people").show();
+    df.join(dfClass,df.col("name").equalTo(dfClass.col("person_name")),"last").show();
+
+
+
   }
 
   private static void runBasicDataFrameExample(SparkSession spark) throws AnalysisException {

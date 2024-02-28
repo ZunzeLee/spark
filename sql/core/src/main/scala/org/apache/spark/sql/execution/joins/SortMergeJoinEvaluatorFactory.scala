@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution.joins
 import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, GenericInternalRow, JoinedRow, Predicate, Projection, RowOrdering, UnsafeProjection, UnsafeRow}
-import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, JoinType, LeftAnti, LeftOuter, LeftSemi, RightOuter}
+import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, JoinType, LastJoin, LeftAnti, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.{ExternalAppendOnlyUnsafeRowArray, RowIterator, SparkPlan}
 import org.apache.spark.sql.execution.metric.SQLMetric
 
@@ -132,6 +132,29 @@ class SortMergeJoinEvaluatorFactory(
             spillThreshold,
             spillSize,
             cleanupResources)
+          val rightNullRow = new GenericInternalRow(right.output.length)
+          new LeftOuterIterator(
+            smjScanner,
+            rightNullRow,
+            boundCondition,
+            resultProj,
+            numOutputRows).toScala
+
+        // add by Zongze Li
+        case LastJoin =>
+          val smjScanner = new SortMergeJoinScanner(
+            streamedKeyGenerator = createLeftKeyGenerator(),
+            bufferedKeyGenerator = createRightKeyGenerator(),
+            keyOrdering,
+            streamedIter = RowIterator.fromScala(leftIter),
+            bufferedIter = RowIterator.fromScala(rightIter),
+            inMemoryThreshold,
+            spillThreshold,
+            spillSize,
+            cleanupResources,
+            false,
+            false
+          )
           val rightNullRow = new GenericInternalRow(right.output.length)
           new LeftOuterIterator(
             smjScanner,

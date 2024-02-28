@@ -375,9 +375,10 @@ trait JoinSelectionHelper {
     }
   }
 
+  // add by Zongze Li
   def canBuildBroadcastRight(joinType: JoinType): Boolean = {
     joinType match {
-      case _: InnerLike | LeftOuter | LeftSemi | LeftAnti | _: ExistenceJoin => true
+      case _: InnerLike | LeftOuter | LeftSemi | LeftAnti | _: ExistenceJoin | LastJoin => true
       case _ => false
     }
   }
@@ -389,10 +390,11 @@ trait JoinSelectionHelper {
     }
   }
 
+  // add by Zongze Li
   def canBuildShuffledHashJoinRight(joinType: JoinType): Boolean = {
     joinType match {
       case _: InnerLike | LeftOuter | FullOuter | RightOuter |
-           LeftSemi | LeftAnti | _: ExistenceJoin => true
+           LeftSemi | LeftAnti | _: ExistenceJoin | LastJoin => true
       case _ => false
     }
   }

@@ -559,12 +559,14 @@ case class Join(
 
   override def maxRows: Option[Long] = {
     joinType match {
-      case Inner | Cross | FullOuter | LeftOuter | RightOuter
+      // add by Zongze Li
+      case Inner | Cross | FullOuter | LeftOuter | LastJoin | RightOuter
           if left.maxRows.isDefined && right.maxRows.isDefined =>
         val leftMaxRows = BigInt(left.maxRows.get)
         val rightMaxRows = BigInt(right.maxRows.get)
         val minRows = joinType match {
-          case LeftOuter => leftMaxRows
+          // add by Zongze Li
+          case LeftOuter| LastJoin => leftMaxRows
           case RightOuter => rightMaxRows
           case FullOuter => leftMaxRows + rightMaxRows
           case _ => BigInt(0)
@@ -590,7 +592,8 @@ case class Join(
         left.output :+ j.exists
       case LeftExistence(_) =>
         left.output
-      case LeftOuter =>
+      // add by Zongze Li
+      case LeftOuter | LastJoin =>
         left.output ++ right.output.map(_.withNullability(true))
       case RightOuter =>
         left.output.map(_.withNullability(true)) ++ right.output
@@ -629,6 +632,9 @@ case class Join(
         left.constraints
       case LeftOuter =>
         left.constraints
+      // add by Zongze Li
+      case LastJoin =>
+        left.constraints
       case RightOuter =>
         right.constraints
       case _ =>
@@ -659,7 +665,8 @@ case class Join(
     var patterns = Seq(JOIN)
     joinType match {
       case _: InnerLike => patterns = patterns :+ INNER_LIKE_JOIN
-      case LeftOuter | FullOuter | RightOuter => patterns = patterns :+ OUTER_JOIN
+      // add by Zongze Li
+      case LeftOuter | LastJoin | FullOuter | RightOuter => patterns = patterns :+ OUTER_JOIN
       case LeftSemiOrAnti(_) => patterns = patterns :+ LEFT_SEMI_OR_ANTI_JOIN
       case NaturalJoin(_) | UsingJoin(_, _) => patterns = patterns :+ NATURAL_LIKE_JOIN
       case _ =>

@@ -731,9 +731,11 @@ object LimitPushDown extends Rule[LogicalPlan] {
     join.joinType match {
       case RightOuter if join.condition.nonEmpty =>
         join.copy(right = maybePushLocalLimit(limitExpr, join.right))
-      case LeftOuter if join.condition.nonEmpty =>
+        // add by Zongze Li
+      case LeftOuter | LastJoin if join.condition.nonEmpty =>
         join.copy(left = maybePushLocalLimit(limitExpr, join.left))
-      case _: InnerLike | RightOuter | LeftOuter | FullOuter if join.condition.isEmpty =>
+      // add by Zongze Li
+      case _: InnerLike | RightOuter | LeftOuter | LastJoin | FullOuter if join.condition.isEmpty =>
         join.copy(
           left = maybePushLocalLimit(limitExpr, join.left),
           right = maybePushLocalLimit(limitExpr, join.right))
@@ -1427,7 +1429,8 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
           join.copy(left = newLeft)
 
         // For left join, we can only infer additional filters for right side.
-        case LeftOuter | LeftAnti =>
+        // add by Zongze Li
+        case LeftOuter | LastJoin | LeftAnti =>
           val allConstraints = getAllConstraints(left, right, conditionOpt)
           val newRight = inferNewFilter(right, allConstraints)
           join.copy(right = newRight)
@@ -1904,7 +1907,8 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
   }
 
   private def canPushThrough(joinType: JoinType): Boolean = joinType match {
-    case _: InnerLike | LeftSemi | RightOuter | LeftOuter | LeftAnti | ExistenceJoin(_) => true
+    // add by Zongze Li
+    case _: InnerLike | LeftSemi | RightOuter |LeftOuter|LastJoin|LeftAnti| ExistenceJoin(_) => true
     case _ => false
   }
 
@@ -1943,7 +1947,8 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
 
           (leftFilterConditions ++ commonFilterCondition).
             reduceLeftOption(And).map(Filter(_, newJoin)).getOrElse(newJoin)
-        case LeftOuter | LeftExistence(_) =>
+          // add by Zongze Li
+        case LeftOuter | LastJoin | LeftExistence(_) =>
           // push down the left side only `where` condition
           val newLeft = leftFilterConditions.
             reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
@@ -1981,7 +1986,8 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
           val newJoinCond = (rightJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
 
           Join(newLeft, newRight, RightOuter, newJoinCond, hint)
-        case LeftOuter | LeftAnti | ExistenceJoin(_) =>
+          // add by Zongze Li
+        case LeftOuter | LastJoin | LeftAnti | ExistenceJoin(_) =>
           // push down the right side only join filter for right sub query
           val newLeft = left
           val newRight = rightJoinConditions.
@@ -2083,7 +2089,8 @@ object CheckCartesianProducts extends Rule[LogicalPlan] with PredicateHelper {
     if (conf.crossJoinEnabled) {
       plan
     } else plan.transformWithPruning(_.containsAnyPattern(INNER_LIKE_JOIN, OUTER_JOIN))  {
-      case j @ Join(left, right, Inner | LeftOuter | RightOuter | FullOuter, _, _)
+          // add by Zongze Li
+      case j @ Join(left, right, Inner | LeftOuter | LastJoin | RightOuter | FullOuter, _, _)
         if isCartesianProduct(j) =>
           throw QueryCompilationErrors.joinConditionMissingOrTrivialError(j, left, right)
     }

@@ -18,7 +18,7 @@
 package org.apache.spark.sql.execution.joins
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
-import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, LeftExistence, LeftOuter, RightOuter}
+import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, LastJoin, LeftExistence, LeftOuter, RightOuter}
 import org.apache.spark.sql.catalyst.plans.physical.{ClusteredDistribution, Distribution, HashPartitioning, Partitioning, PartitioningCollection, UnknownPartitioning, UnspecifiedDistribution}
 
 /**
@@ -48,6 +48,8 @@ trait ShuffledJoin extends JoinCodegenSupport {
     case _: InnerLike =>
       PartitioningCollection(Seq(left.outputPartitioning, right.outputPartitioning))
     case LeftOuter => left.outputPartitioning
+    // add by Zongze Li
+    case LastJoin => left.outputPartitioning
     case RightOuter => right.outputPartitioning
     case FullOuter => UnknownPartitioning(left.outputPartitioning.numPartitions)
     case LeftExistence(_) => left.outputPartitioning
@@ -71,6 +73,9 @@ trait ShuffledJoin extends JoinCodegenSupport {
       case _: InnerLike =>
         left.output ++ right.output
       case LeftOuter =>
+        left.output ++ right.output.map(_.withNullability(true))
+      // add by Zongze Li
+      case LastJoin =>
         left.output ++ right.output.map(_.withNullability(true))
       case RightOuter =>
         left.output.map(_.withNullability(true)) ++ right.output

@@ -54,6 +54,9 @@ trait HashJoin extends JoinCodegenSupport {
         left.output ++ right.output
       case LeftOuter =>
         left.output ++ right.output.map(_.withNullability(true))
+        // add by Zongze Li
+      case LastJoin =>
+        left.output ++ right.output.map(_.withNullability(true))
       case RightOuter =>
         left.output.map(_.withNullability(true)) ++ right.output
       case j: ExistenceJoin =>
@@ -75,7 +78,8 @@ trait HashJoin extends JoinCodegenSupport {
       }
     case BuildRight =>
       joinType match {
-        case _: InnerLike | LeftOuter | LeftSemi | LeftAnti | _: ExistenceJoin =>
+        // add by Zongze Li
+        case _: InnerLike | LeftOuter | LeftSemi | LeftAnti | _: ExistenceJoin | LastJoin =>
           left.outputPartitioning
         case x =>
           throw new IllegalArgumentException(
@@ -93,7 +97,8 @@ trait HashJoin extends JoinCodegenSupport {
       }
     case BuildRight =>
       joinType match {
-        case _: InnerLike | LeftOuter | LeftSemi | LeftAnti | _: ExistenceJoin =>
+        // add by Zongze Li
+        case _: InnerLike | LeftOuter | LeftSemi | LeftAnti | _: ExistenceJoin | LastJoin =>
           left.outputOrdering
         case x =>
           throw new IllegalArgumentException(
@@ -192,7 +197,8 @@ trait HashJoin extends JoinCodegenSupport {
 
   private def outerJoin(
       streamedIter: Iterator[InternalRow],
-      hashedRelation: HashedRelation): Iterator[InternalRow] = {
+      hashedRelation: HashedRelation,
+      isLastJoin: Boolean = false): Iterator[InternalRow] = {
     val joinedRow = new JoinedRow()
     val keyGenerator = streamSideKeyGenerator()
     val nullRow = new GenericInternalRow(buildPlan.output.length)
@@ -216,13 +222,33 @@ trait HashJoin extends JoinCodegenSupport {
         new RowIterator {
           private var found = false
           override def advanceNext(): Boolean = {
-            while (buildIter != null && buildIter.hasNext) {
-              val nextBuildRow = buildIter.next()
-              if (boundCondition(joinedRow.withRight(nextBuildRow))) {
-                found = true
-                return true
-              }
+
+            // add by Zongze Li
+            if (isLastJoin && found) {
+              return false
             }
+
+            // add by Zongze Li
+            if (isLastJoin) {
+              if (buildIter != null && buildIter.hasNext) {
+                val nextBuildRow = buildIter.next()
+                if (boundCondition(joinedRow.withRight(nextBuildRow))) {
+                  found = true
+                  return true
+                }
+              }
+
+            } else {
+              while (buildIter != null && buildIter.hasNext) {
+                val nextBuildRow = buildIter.next()
+                if (boundCondition(joinedRow.withRight(nextBuildRow))) {
+                  found = true
+                  return true
+                }
+              }
+
+            }
+
             if (!found) {
               joinedRow.withRight(nullRow)
               found = true
@@ -330,6 +356,9 @@ trait HashJoin extends JoinCodegenSupport {
         innerJoin(streamedIter, hashed)
       case LeftOuter | RightOuter =>
         outerJoin(streamedIter, hashed)
+      // add by Zongze Li
+      case LastJoin =>
+        outerJoin(streamedIter, hashed, true)
       case LeftSemi =>
         semiJoin(streamedIter, hashed)
       case LeftAnti =>
@@ -356,6 +385,8 @@ trait HashJoin extends JoinCodegenSupport {
     joinType match {
       case _: InnerLike => codegenInner(ctx, input)
       case LeftOuter | RightOuter => codegenOuter(ctx, input)
+      // add by Zongze  Li
+      case LastJoin => codegenOuter(ctx, input, true)
       case LeftSemi => codegenSemi(ctx, input)
       case LeftAnti => codegenAnti(ctx, input)
       case _: ExistenceJoin => codegenExistence(ctx, input)
@@ -439,9 +470,11 @@ trait HashJoin extends JoinCodegenSupport {
   }
 
   /**
+   * Add by Zongze Li
    * Generates the code for left or right outer join.
    */
-  protected def codegenOuter(ctx: CodegenContext, input: Seq[ExprCode]): String = {
+  protected def codegenOuter(ctx: CodegenContext, input: Seq[ExprCode]
+                             , isLastJoin: Boolean = false): String = {
     val HashedRelationInfo(relationTerm, keyIsUnique, _) = prepareRelation(ctx)
     val (keyEv, anyNull) = genStreamSideJoinKey(ctx, input)
     val matched = ctx.freshName("matched")
@@ -494,24 +527,49 @@ trait HashJoin extends JoinCodegenSupport {
       val iteratorCls = classOf[Iterator[UnsafeRow]].getName
       val found = ctx.freshName("found")
 
-      s"""
-         |// generate join key for stream side
-         |${keyEv.code}
-         |// find matches from HashRelation
-         |$iteratorCls $matches = $anyNull ? null : ($iteratorCls)$relationTerm.get(${keyEv.value});
-         |boolean $found = false;
-         |// the last iteration of this loop is to emit an empty row if there is no matched rows.
-         |while ($matches != null && $matches.hasNext() || !$found) {
-         |  UnsafeRow $matched = $matches != null && $matches.hasNext() ?
-         |    (UnsafeRow) $matches.next() : null;
-         |  ${checkCondition.trim}
-         |  if ($conditionPassed) {
-         |    $found = true;
-         |    $numOutput.add(1);
-         |    ${consume(ctx, resultVars)}
-         |  }
-         |}
+      // add by Zongze Li
+      if (isLastJoin) {
+        s"""
+           |// generate join key for stream side
+           |${keyEv.code}
+           |// find matches from HashRelation
+           |$iteratorCls $matches = $anyNull ?
+           | null : ($iteratorCls)$relationTerm.get(${keyEv.value});
+           |boolean $found = false;
+           |// the last iteration of this loop is to emit an empty row if there is no matched rows.
+           |if ($matches != null && $matches.hasNext() || !$found) {
+           |  UnsafeRow $matched = $matches != null && $matches.hasNext() ?
+           |    (UnsafeRow) $matches.next() : null;
+           |  ${checkCondition.trim}
+           |  if ($conditionPassed) {
+           |    $found = true;
+           |    $numOutput.add(1);
+           |    ${consume(ctx, resultVars)}
+           |  }
+           |}
        """.stripMargin
+      } else {
+        s"""
+           |// generate join key for stream side
+           |${keyEv.code}
+           |// find matches from HashRelation
+           |$iteratorCls $matches = $anyNull ?
+           | null : ($iteratorCls)$relationTerm.get(${keyEv.value});
+           |boolean $found = false;
+           |// the last iteration of this loop is to emit an empty row if there is no matched rows.
+           |while ($matches != null && $matches.hasNext() || !$found) {
+           |  UnsafeRow $matched = $matches != null && $matches.hasNext() ?
+           |    (UnsafeRow) $matches.next() : null;
+           |  ${checkCondition.trim}
+           |  if ($conditionPassed) {
+           |    $found = true;
+           |    $numOutput.add(1);
+           |    ${consume(ctx, resultVars)}
+           |  }
+           |}
+       """.stripMargin
+      }
+
     }
   }
 

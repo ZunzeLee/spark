@@ -61,6 +61,8 @@ case class SortMergeJoinExec(
       }
     // For left and right outer joins, the output is ordered by the streamed input's join keys.
     case LeftOuter => getKeyOrdering(leftKeys, left.outputOrdering)
+    // add by Zongze Li
+    case LastJoin => getKeyOrdering(leftKeys, left.outputOrdering)
     case RightOuter => getKeyOrdering(rightKeys, right.outputOrdering)
     // There are null rows in both streams, so there is no order.
     case FullOuter => Nil
@@ -147,7 +149,8 @@ case class SortMergeJoinExec(
   }
 
   private lazy val ((streamedPlan, streamedKeys), (bufferedPlan, bufferedKeys)) = joinType match {
-    case _: InnerLike | LeftOuter | FullOuter | LeftExistence(_) =>
+    // add by Zongze Li
+    case _: InnerLike | LeftOuter | FullOuter | LeftExistence(_) | LastJoin =>
       ((left, leftKeys), (right, rightKeys))
     case RightOuter => ((right, rightKeys), (left, leftKeys))
     case x =>
@@ -238,7 +241,8 @@ case class SortMergeJoinExec(
            |$streamedRow = null;
            |continue;
          """.stripMargin
-      case LeftOuter | RightOuter | LeftAnti | ExistenceJoin(_) =>
+        // add by Zongze Li
+      case LeftOuter | RightOuter | LeftAnti | ExistenceJoin(_) | LastJoin =>
         // Eagerly return streamed row. Only call `matches.clear()` when `matches.isEmpty()` is
         // false, to reduce unnecessary computation.
         s"""
@@ -257,7 +261,8 @@ case class SortMergeJoinExec(
       case _: InnerLike | LeftSemi =>
         // Skip streamed row.
         s"$streamedRow = null;"
-      case LeftOuter | RightOuter | LeftAnti | ExistenceJoin(_) =>
+      // add by Zongze Li
+      case LeftOuter | RightOuter | LeftAnti | ExistenceJoin(_) | LastJoin =>
         // Eagerly return with streamed row.
         "return false;"
       case x =>
@@ -466,7 +471,8 @@ case class SortMergeJoinExec(
     val iterator = ctx.freshName("iterator")
     val numOutput = metricTerm(ctx, "numOutputRows")
     val resultVars = joinType match {
-      case _: InnerLike | LeftOuter =>
+      // add by Zongze Li
+      case _: InnerLike | LeftOuter  | LastJoin =>
         streamedVars ++ bufferedVars
       case RightOuter =>
         bufferedVars ++ streamedVars
@@ -563,6 +569,10 @@ case class SortMergeJoinExec(
       case LeftOuter | RightOuter =>
         codegenOuter(streamedInput, findNextJoinRows, beforeLoop, iterator, bufferedRow, condCheck,
           ctx.freshName("hasOutputRow"), outputRow, eagerCleanup)
+      // add by Zongze Li
+      case LastJoin =>
+        codegenOuter(streamedInput, findNextJoinRows, beforeLoop, iterator, bufferedRow, condCheck,
+          ctx.freshName("hasOutputRow"), outputRow, eagerCleanup, true)
       case LeftSemi =>
         val cleanedFlag =
           ctx.addMutableState(CodeGenerator.JAVA_BOOLEAN, "cleanedFlag", v => s"$v = false;")
@@ -643,25 +653,49 @@ case class SortMergeJoinExec(
       conditionCheck: String,
       hasOutputRow: String,
       outputRow: String,
-      eagerCleanup: String): String = {
-    s"""
-       |while ($streamedInput.hasNext()) {
-       |  $findNextJoinRows;
-       |  $beforeLoop
-       |  boolean $hasOutputRow = false;
-       |
-       |  // the last iteration of this loop is to emit an empty row if there is no matched rows.
-       |  while ($matchIterator.hasNext() || !$hasOutputRow) {
-       |    InternalRow $bufferedRow = $matchIterator.hasNext() ?
-       |      (InternalRow) $matchIterator.next() : null;
-       |    $conditionCheck
-       |    $hasOutputRow = true;
-       |    $outputRow
-       |  }
-       |  if (shouldStop()) return;
-       |}
-       |$eagerCleanup
+      eagerCleanup: String,
+      isLastJoin: Boolean = false): String = {
+    // add by Zongze Li
+    if (isLastJoin) {
+      s"""
+         |while ($streamedInput.hasNext()) {
+         |  $findNextJoinRows;
+         |  $beforeLoop
+         |  boolean $hasOutputRow = false;
+         |
+         |  // the last iteration of this loop is to emit an empty row if there is no matched rows.
+         |  if ($matchIterator.hasNext() || !$hasOutputRow) {
+         |    InternalRow $bufferedRow = $matchIterator.hasNext() ?
+         |      (InternalRow) $matchIterator.next() : null;
+         |    $conditionCheck
+         |    $hasOutputRow = true;
+         |    $outputRow
+         |  }
+         |  if (shouldStop()) return;
+         |}
+         |$eagerCleanup
      """.stripMargin
+    } else {
+      s"""
+         |while ($streamedInput.hasNext()) {
+         |  $findNextJoinRows;
+         |  $beforeLoop
+         |  boolean $hasOutputRow = false;
+         |
+         |  // the last iteration of this loop is to emit an empty row if there is no matched rows.
+         |  while ($matchIterator.hasNext() || !$hasOutputRow) {
+         |    InternalRow $bufferedRow = $matchIterator.hasNext() ?
+         |      (InternalRow) $matchIterator.next() : null;
+         |    $conditionCheck
+         |    $hasOutputRow = true;
+         |    $outputRow
+         |  }
+         |  if (shouldStop()) return;
+         |}
+         |$eagerCleanup
+     """.stripMargin
+    }
+
   }
 
   /**
@@ -1057,7 +1091,8 @@ private[joins] class SortMergeJoinScanner(
     spillThreshold: Int,
     spillSize: SQLMetric,
     eagerCleanupResources: () => Unit,
-    onlyBufferFirstMatch: Boolean = false) {
+    onlyBufferFirstMatch: Boolean = false,
+    isLastJoin: Boolean = false) {
   private[this] var streamedRow: InternalRow = _
   private[this] var streamedRowKey: InternalRow = _
   private[this] var bufferedRow: InternalRow = _
@@ -1233,12 +1268,21 @@ private[joins] class SortMergeJoinScanner(
     // This join key may have been produced by a mutable projection, so we need to make a copy:
     matchJoinKey = streamedRowKey.copy()
     bufferedMatches.clear()
-    do {
+    // add by Zongze Li
+    if (isLastJoin) {
       if (!onlyBufferFirstMatch || bufferedMatches.isEmpty) {
         bufferedMatches.add(bufferedRow.asInstanceOf[UnsafeRow])
       }
       advancedBufferedToRowWithNullFreeJoinKey()
-    } while (bufferedRow != null && keyOrdering.compare(streamedRowKey, bufferedRowKey) == 0)
+    } else {
+      do {
+        if (!onlyBufferFirstMatch || bufferedMatches.isEmpty) {
+          bufferedMatches.add(bufferedRow.asInstanceOf[UnsafeRow])
+        }
+        advancedBufferedToRowWithNullFreeJoinKey()
+      } while (bufferedRow != null && keyOrdering.compare(streamedRowKey, bufferedRowKey) == 0)
+    }
+
   }
 }
 
